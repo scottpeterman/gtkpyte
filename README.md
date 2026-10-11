@@ -8,7 +8,24 @@ widget under the Omega suite). gtkpyte is the same core with a native GTK
 front end: a `GtkWidget` subclass with a plain C API, GObject properties and
 signals, so it fits the way traditional GTK applications are put together.
 
-![solarized-dark, dracula and tango-light](docs/schemes.png)
+![vim in gtkpyte, gruvbox-dark, JetBrains Mono 12](docs/screenshots/vim.png)
+
+## Screenshots
+
+**htop**, nord scheme, Hack 12:
+
+![htop in gtkpyte](docs/screenshots/htop.png)
+
+**btop**, dracula scheme, Fira Code 11. Braille graphs, box drawing and
+truecolor on the cell grid:
+
+![btop in gtkpyte](docs/screenshots/btop.png)
+
+**All eight built-in schemes**, alternating JetBrains Mono, Fira Code, Hack
+and DejaVu Sans Mono. The last line of each shows that programming-font
+ligatures are off: `!=`, `>=` and `==` stay two cells wide.
+
+![colour schemes and fonts](docs/screenshots/schemes.png)
 
 ## Features
 
@@ -28,8 +45,9 @@ signals, so it fits the way traditional GTK applications are put together.
   classic encodings) for vim `mouse=a`, htop, tmux and mc, with Shift held to
   select locally. Alternate-scroll (1007) so the wheel works in less, man
   and a mouse-less vim.
-- **Appearance**: any Pango font; eight built-in colour schemes; every colour
-  settable through the API or as a property.
+- **Appearance**: any Pango monospace font, with ligatures turned off so
+  every character keeps its own cell; eight built-in colour schemes; every
+  colour settable through the API or as a property.
 
 ## Building
 

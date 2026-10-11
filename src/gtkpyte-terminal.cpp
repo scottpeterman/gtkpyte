@@ -244,9 +244,27 @@ void scroll_to_live(GtkpyteTerminal *self) {
 
 // --- font metrics -----------------------------------------------------------
 
+// Every layout carries this. A terminal draws one character per cell, and a
+// programming font's ligatures (JetBrains Mono, Fira Code, Cascadia) would
+// otherwise fuse "==" or "!=" into one glyph spanning two cells -- the text
+// stops matching the grid, and the source on screen stops matching the file.
+// VTE turns the same features off.
+PangoAttrList *base_attrs() {
+    PangoAttrList *list = pango_attr_list_new();
+    pango_attr_list_insert(list, pango_attr_font_features_new("liga 0, clig 0, calt 0, dlig 0"));
+    return list;
+}
+
+void reset_attrs(PangoLayout *layout) {
+    PangoAttrList *list = base_attrs();
+    pango_layout_set_attributes(layout, list);
+    pango_attr_list_unref(list);
+}
+
 PangoLayout *make_layout(GtkpyteTerminal *self) {
     PangoLayout *layout = gtk_widget_create_pango_layout(GTK_WIDGET(self), nullptr);
     pango_layout_set_font_description(layout, self->st->font);
+    reset_attrs(layout);
     return layout;
 }
 
@@ -337,7 +355,7 @@ void append_utf8(std::string &out, char32_t cp) {
 }
 
 PangoAttrList *attrs_for(const pyte::Attrs &a) {
-    PangoAttrList *list = pango_attr_list_new();
+    PangoAttrList *list = base_attrs();
     if (a.bold) {
         pango_attr_list_insert(list, pango_attr_weight_new(PANGO_WEIGHT_BOLD));
     }
@@ -449,7 +467,7 @@ void paint_row(GtkpyteTerminal *self, GtkSnapshot *snapshot, PangoLayout *layout
             draw_text_at(snapshot, layout, glyph, static_cast<float>(i) * cw, top, fg);
         }
     }
-    pango_layout_set_attributes(layout, nullptr);
+    reset_attrs(layout);
 }
 
 void paint_selection(GtkpyteTerminal *self, GtkSnapshot *snapshot) {
@@ -511,7 +529,7 @@ void paint_cursor(GtkpyteTerminal *self, GtkSnapshot *snapshot, PangoLayout *lay
         std::string glyph;
         append_utf8(glyph, cell.ch);
         draw_text_at(snapshot, layout, glyph, r.origin.x, r.origin.y, st->palette.background());
-        pango_layout_set_attributes(layout, nullptr);
+        reset_attrs(layout);
     }
 }
 
