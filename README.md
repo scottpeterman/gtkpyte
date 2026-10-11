@@ -2,11 +2,14 @@
 
 A GTK 4 terminal widget, and a small terminal app built on it, for Linux.
 
-The emulation core is **pyte**, a headless C++17 terminal emulator shared with
-[anytermqt](https://github.com/scottpeterman/anytermqt) (qtpyte, the Qt
-widget under the Omega suite). gtkpyte is the same core with a native GTK
-front end: a `GtkWidget` subclass with a plain C API, GObject properties and
-signals, so it fits the way traditional GTK applications are put together.
+The emulation core is **pyte C++**, a headless C++17 terminal emulator shared
+with [anytermqt](https://github.com/scottpeterman/anytermqt) (qtpyte, the Qt
+widget under the Omega suite). It is not the Python
+[pyte](https://github.com/selectel/pyte) library: it is the author's own port,
+by way of his earlier Go port, [gopyte](https://github.com/scottpeterman/pathfinderssh/tree/main/internal/gopyte) (see [Lineage](#lineage)). gtkpyte puts
+a native GTK front end on it: a `GtkWidget` subclass with a plain C API,
+GObject properties and signals, so it fits the way traditional GTK
+applications are put together.
 
 ![vim in gtkpyte, gruvbox-dark, JetBrains Mono 12](docs/screenshots/vim.png)
 
@@ -176,10 +179,17 @@ layer that turns GTK events into calls on them.
 
 ## Lineage
 
-Python [pyte](https://github.com/selectel/pyte) → gopyte (Go) → pyte (C++17,
-in anytermqt) → qtpyte (Qt widget, used by Omega) and gtkpyte (this). The
-core is vendored here rather than shared, so fixes made in either place have
-to be carried across.
+| Step | Language | What it is |
+|---|---|---|
+| [pyte](https://github.com/selectel/pyte) | Python | The original terminal emulator library, by George Shuklin, Sergei Lebedev and contributors. The design all the ports follow. |
+| [gopyte](https://github.com/scottpeterman/pathfinderssh/tree/main/internal/gopyte) | Go | Scott Peterman's first port: Python pyte to Go. Its public copy lives in PathfinderSSH. |
+| pyte C++ | C++17 | His port of gopyte, in anytermqt. Vendored here as `pyte/`. |
+| qtpyte | C++ / Qt 6 | Qt widget on pyte C++; the terminal in the Omega suite. |
+| gtkpyte | C++ / GTK 4 | This project: GTK widget on pyte C++. |
+
+The `pyte/` directory and the `pyte::` namespace keep the name they have in
+anytermqt, so the two stay easy to diff. The core is vendored rather than
+shared, so a fix made in either place has to be carried across.
 
 ## Licence
 

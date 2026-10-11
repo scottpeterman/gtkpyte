@@ -10,24 +10,37 @@ or re-pinned.
 
 ## Compiled into gtkpyte
 
-### pyte (C++ emulation core)
+### pyte C++ core (`pyte/`) -- not the Python pyte library
 
 - Copyright Scott Peterman
 - GNU General Public License v3.0
-- Vendored as `pyte/` from https://github.com/scottpeterman/anytermqt
+- Vendored from https://github.com/scottpeterman/anytermqt
 
 The headless terminal emulator under the widget: escape-sequence parser,
-screen buffer, scrollback. A C++17 port of gopyte, which is itself a port
-of the Python **pyte** library.
+screen buffer, scrollback. It shares a name with Python pyte because it
+descends from it, but it is a separate implementation, and the third step
+of a line of ports by the same author:
 
-Python pyte, from which this core takes its name, design and behaviour:
+1. **pyte** (Python) -- the original, by George Shuklin, Sergei Lebedev and
+   contributors. See below.
+2. **gopyte** (Go) -- Scott Peterman's port of Python pyte to Go, and the
+   first of these ports. GPL-3.0; its public copy lives in PathfinderSSH:
+   https://github.com/scottpeterman/pathfinderssh/tree/main/internal/gopyte
+3. **pyte C++** (C++17) -- Scott Peterman's port of gopyte, living in
+   anytermqt and vendored here.
+
+The Qt widget (qtpyte) and this GTK widget (gtkpyte) both sit on step 3.
+
+### pyte (Python), the original
 
 - Copyright George Shuklin, Sergei Lebedev and contributors
 - GNU Lesser General Public License v3.0 (`licenses/LGPL-3.0.txt`)
 - https://github.com/selectel/pyte
 
-LGPL-3.0 permits a derived work to be conveyed under GPL-3.0, which is how
-gtkpyte conveys it.
+The design and behaviour the ports follow: the split between a byte-stream
+parser and a screen it drives, and how each escape sequence acts on the
+screen. The ports are translations rather than copies, and as derived works
+they are conveyed under GPL-3.0, which LGPL-3.0 permits.
 
 ### utf8proc
 
