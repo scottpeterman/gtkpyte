@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=gtkpyte
+GenericName=Terminal
+Comment=GTK4 terminal on the pyte emulation core
+Exec=@bindir@/gtkpyte
+Icon=utilities-terminal
+Terminal=false
+Categories=System;TerminalEmulator;GTK;
+StartupWMClass=gtkpyte
+StartupNotify=true

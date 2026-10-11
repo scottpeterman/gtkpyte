@@ -1,0 +1,130 @@
+// src/main.cpp
+//
+// gtkpyte: a terminal window running your shell on a local pty.
+//
+//   gtkpyte
+//   gtkpyte --font "DejaVu Sans Mono 12"
+//   gtkpyte -- htop
+//
+// Ctrl+Shift+V pastes. Shift+PageUp/PageDown and the wheel scroll back.
+
+#include <gtk/gtk.h>
+
+#include <pwd.h>
+#include <sys/wait.h>
+#include <unistd.h>
+
+#include <cstdlib>
+#include <cstring>
+#include <iostream>
+#include <string>
+#include <vector>
+
+#include "gtkpyte-terminal.h"
+#include "ptysession.h"
+
+namespace {
+
+struct Options {
+    std::string font;
+    std::string program;
+    std::vector<std::string> args;
+};
+
+Options g_options;
+
+std::string user_shell() {
+    const char *env = std::getenv("SHELL");
+    if (env != nullptr && *env != '\0') {
+        return env;
+    }
+    const passwd *pw = getpwuid(getuid());
+    if (pw != nullptr && pw->pw_shell != nullptr && *pw->pw_shell != '\0') {
+        return pw->pw_shell;
+    }
+    return "/bin/sh";
+}
+
+gboolean destroy_window(gpointer window) {
+    gtk_window_destroy(GTK_WINDOW(window));
+    g_object_unref(window);
+    return G_SOURCE_REMOVE;
+}
+
+void delete_session(gpointer session) {
+    delete static_cast<gtkpyte::PtySession *>(session);
+}
+
+void on_activate(GtkApplication *app, gpointer) {
+    GtkWidget *window = gtk_application_window_new(app);
+    GtkWidget *terminal = gtkpyte_terminal_new();
+    auto *term = GTKPYTE_TERMINAL(terminal);
+    if (!g_options.font.empty()) {
+        gtkpyte_terminal_set_font(term, g_options.font.c_str());
+    }
+
+    const std::string program = g_options.program.empty() ? user_shell() : g_options.program;
+    gtk_window_set_title(GTK_WINDOW(window), program.c_str());
+    gtk_window_set_child(GTK_WINDOW(window), terminal);
+
+    auto *session = new gtkpyte::PtySession(term);
+    // Owned by the window: closing it hangs up the child.
+    g_object_set_data_full(G_OBJECT(window), "gtkpyte-session", session, delete_session);
+
+    session->set_exit_handler([window](int status) {
+        if (WIFEXITED(status) && WEXITSTATUS(status) == 127) {
+            std::cerr << "gtkpyte: could not run the program (exit 127)\n";
+        }
+        // Deferred: this runs inside the session's own callback, and closing
+        // the window deletes the session.
+        g_idle_add(destroy_window, g_object_ref(window));
+    });
+
+    if (!session->start(program, g_options.args)) {
+        std::cerr << "gtkpyte: " << session->error() << "\n";
+        gtk_window_destroy(GTK_WINDOW(window));
+        return;
+    }
+
+    gtk_window_present(GTK_WINDOW(window));
+    gtk_widget_grab_focus(terminal);
+}
+
+void usage() {
+    std::cerr << "usage: gtkpyte [--font \"Family Size\"] [-- program [args...]]\n";
+}
+
+}  // namespace
+
+int main(int argc, char *argv[]) {
+    for (int i = 1; i < argc; ++i) {
+        if (std::strcmp(argv[i], "--font") == 0 && i + 1 < argc) {
+            g_options.font = argv[++i];
+        } else if (std::strncmp(argv[i], "--font=", 7) == 0) {
+            g_options.font = argv[i] + 7;
+        } else if (std::strcmp(argv[i], "--") == 0) {
+            if (i + 1 < argc) {
+                g_options.program = argv[i + 1];
+                for (int j = i + 2; j < argc; ++j) {
+                    g_options.args.emplace_back(argv[j]);
+                }
+            }
+            break;
+        } else if (std::strcmp(argv[i], "-h") == 0 || std::strcmp(argv[i], "--help") == 0) {
+            usage();
+            return 0;
+        } else {
+            usage();
+            return 2;
+        }
+    }
+
+    // Non-unique: each launch is its own terminal, not a request to an
+    // already-running instance to open one.
+    GtkApplication *app =
+        gtk_application_new("io.github.scottpeterman.gtkpyte", G_APPLICATION_NON_UNIQUE);
+    g_signal_connect(app, "activate", G_CALLBACK(on_activate), nullptr);
+    const int status = g_application_run(G_APPLICATION(app), 0, nullptr);
+    g_object_unref(app);
+    return status;
+}
