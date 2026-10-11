@@ -15,6 +15,7 @@
 #include "palette.h"
 #include "pyte/screen.h"
 #include "pyte/stream.h"
+#include "mouse.h"
 #include "selection.h"
 
 namespace {
@@ -72,7 +73,19 @@ struct State {
     bool bracketed_paste = false;
     bool focused = false;
 
-    double scroll_accum = 0.0;
+    double scroll_accum = 0.0;  // wheel steps (touchpad: cell heights) not yet acted on
+
+    // Mouse reporting. mouse_button is the button whose press was sent to the
+    // application, so its release goes there too even if Shift is pressed in
+    // between; -1 when none. The last cell sent dedupes motion reports.
+    gtkpyte::MouseModes mouse;
+    int mouse_button = -1;
+    int mouse_last_col = -1;
+    int mouse_last_row = -1;
+    // Pointer position in widget coordinates, kept by a motion controller:
+    // scroll events carry no widget-relative position of their own.
+    double pointer_x = 0.0;
+    double pointer_y = 0.0;
 
     // Selection drag: where the pointer is (widget coordinates), and the
     // auto-scroll timer running while it is outside the widget vertically.
@@ -268,6 +281,16 @@ void handle_mode(GtkpyteTerminal *self, int mode, bool set, bool private_mode) {
         return;
     }
     State *st = self->st;
+    if (st->mouse.apply(mode, set)) {
+        if (!st->mouse.reporting()) {
+            st->mouse_button = -1;
+        }
+        // An arrow while the application has the mouse, the I-beam while
+        // the mouse selects text.
+        gtk_widget_set_cursor_from_name(GTK_WIDGET(self),
+                                        st->mouse.reporting() ? "default" : "text");
+        return;
+    }
     switch (mode) {
         case kModeCursorKeys:
             st->key_modes.application_cursor = set;
@@ -711,23 +734,190 @@ void on_drag_end(GtkGestureDrag *, double, double, gpointer data) {
 
 // --- scroll and keyboard ----------------------------------------------------
 
+gtkpyte::MouseMods mouse_mods(GdkModifierType state) {
+    gtkpyte::MouseMods m;
+    m.shift = (state & GDK_SHIFT_MASK) != 0;
+    m.alt = (state & GDK_ALT_MASK) != 0;
+    m.ctrl = (state & GDK_CONTROL_MASK) != 0;
+    return m;
+}
+
+// Pixel to the grid cell a report names. Unlike selection, the column clamps
+// to the last cell: a report has no "past the end" position.
+void pixel_to_report_cell(GtkpyteTerminal *self, double x, double y, int &col, int &row) {
+    State *st = self->st;
+    col = std::clamp(static_cast<int>(std::floor(x / st->cell_w)), 0, std::max(0, st->cols - 1));
+    row = std::clamp(static_cast<int>(std::floor(y / st->cell_h)), 0,
+                     std::max(0, std::min(st->rows, st->screen.rows()) - 1));
+}
+
+void send_mouse(GtkpyteTerminal *self, gtkpyte::MouseAction action, int button, int col,
+                int row, GdkModifierType state) {
+    State *st = self->st;
+    emit_commit(self, gtkpyte::encode_mouse(st->mouse, action, button, col, row,
+                                            mouse_mods(state)));
+}
+
+// --- mouse reporting --------------------------------------------------------
+//
+// A capture-phase drag gesture on every button sees presses before the
+// selection gestures do. When the application has asked for the mouse and
+// Shift is not held, it claims the sequence -- press, drag and release all go
+// to the application and selection never sees them. Otherwise it denies the
+// sequence and the event carries on to selection untouched. Shift as the
+// override is xterm's convention, and what every full-screen app expects.
+
+int gdk_to_xterm_button(guint button) {
+    switch (button) {
+        case GDK_BUTTON_PRIMARY:   return gtkpyte::kMouseLeft;
+        case GDK_BUTTON_MIDDLE:    return gtkpyte::kMouseMiddle;
+        case GDK_BUTTON_SECONDARY: return gtkpyte::kMouseRight;
+        default:                   return -1;
+    }
+}
+
+void on_report_begin(GtkGestureDrag *gesture, double x, double y, gpointer data) {
+    auto *self = GTKPYTE_TERMINAL(data);
+    State *st = self->st;
+    const GdkModifierType state =
+        gtk_event_controller_get_current_event_state(GTK_EVENT_CONTROLLER(gesture));
+    const int button =
+        gdk_to_xterm_button(gtk_gesture_single_get_current_button(GTK_GESTURE_SINGLE(gesture)));
+
+    if (!st->mouse.reporting() || (state & GDK_SHIFT_MASK) || button < 0) {
+        gtk_gesture_set_state(GTK_GESTURE(gesture), GTK_EVENT_SEQUENCE_DENIED);
+        return;
+    }
+    gtk_gesture_set_state(GTK_GESTURE(gesture), GTK_EVENT_SEQUENCE_CLAIMED);
+    gtk_widget_grab_focus(GTK_WIDGET(self));
+
+    int col = 0;
+    int row = 0;
+    pixel_to_report_cell(self, x, y, col, row);
+    st->mouse_button = button;
+    st->mouse_last_col = col;
+    st->mouse_last_row = row;
+    send_mouse(self, gtkpyte::MouseAction::Press, button, col, row, state);
+}
+
+void on_report_update(GtkGestureDrag *gesture, double dx, double dy, gpointer data) {
+    auto *self = GTKPYTE_TERMINAL(data);
+    State *st = self->st;
+    if (st->mouse_button < 0) {
+        return;
+    }
+    double sx = 0.0;
+    double sy = 0.0;
+    gtk_gesture_drag_get_start_point(gesture, &sx, &sy);
+    st->pointer_x = sx + dx;
+    st->pointer_y = sy + dy;
+    int col = 0;
+    int row = 0;
+    pixel_to_report_cell(self, sx + dx, sy + dy, col, row);
+    if (col == st->mouse_last_col && row == st->mouse_last_row) {
+        return;  // one report per cell crossed, not per pixel
+    }
+    st->mouse_last_col = col;
+    st->mouse_last_row = row;
+    send_mouse(self, gtkpyte::MouseAction::Motion, st->mouse_button, col, row,
+               gtk_event_controller_get_current_event_state(GTK_EVENT_CONTROLLER(gesture)));
+}
+
+void on_report_end(GtkGestureDrag *gesture, double dx, double dy, gpointer data) {
+    auto *self = GTKPYTE_TERMINAL(data);
+    State *st = self->st;
+    if (st->mouse_button < 0) {
+        return;
+    }
+    double sx = 0.0;
+    double sy = 0.0;
+    gtk_gesture_drag_get_start_point(gesture, &sx, &sy);
+    int col = 0;
+    int row = 0;
+    pixel_to_report_cell(self, sx + dx, sy + dy, col, row);
+    const int button = st->mouse_button;
+    st->mouse_button = -1;
+    send_mouse(self, gtkpyte::MouseAction::Release, button, col, row,
+               gtk_event_controller_get_current_event_state(GTK_EVENT_CONTROLLER(gesture)));
+}
+
+// Pointer tracking for the wheel, plus motion with no button held, which only
+// any-motion mode (1003) reports.
+void on_pointer_motion(GtkEventControllerMotion *controller, double x, double y, gpointer data) {
+    auto *self = GTKPYTE_TERMINAL(data);
+    State *st = self->st;
+    st->pointer_x = x;
+    st->pointer_y = y;
+    if (st->mouse.tracking != gtkpyte::MouseModes::kAnyMotion || st->mouse_button >= 0) {
+        return;  // a held button's motion is reported by the drag gesture
+    }
+    int col = 0;
+    int row = 0;
+    pixel_to_report_cell(self, x, y, col, row);
+    if (col == st->mouse_last_col && row == st->mouse_last_row) {
+        return;
+    }
+    st->mouse_last_col = col;
+    st->mouse_last_row = row;
+    send_mouse(self, gtkpyte::MouseAction::Motion, -1, col, row,
+               gtk_event_controller_get_current_event_state(GTK_EVENT_CONTROLLER(controller)));
+}
+
 gboolean on_scroll(GtkEventControllerScroll *controller, double, double dy, gpointer data) {
     auto *self = GTKPYTE_TERMINAL(data);
     State *st = self->st;
-    // Full-screen applications have no scrollback of their own to show.
-    if (st->screen.alternate_screen()) {
+    const GdkModifierType state =
+        gtk_event_controller_get_current_event_state(GTK_EVENT_CONTROLLER(controller));
+    const bool shift = (state & GDK_SHIFT_MASK) != 0;
+    const bool reporting = st->mouse.reporting() && !shift;
+    const bool alt_scroll = !st->mouse.reporting() && st->screen.alternate_screen() &&
+                            st->mouse.alternate_scroll;
+
+    // Full-screen applications have no scrollback, and with neither mouse
+    // reporting nor alternate-scroll there is nothing for the wheel to do.
+    if (!reporting && !alt_scroll && st->screen.alternate_screen()) {
         return FALSE;
     }
-    const GdkScrollUnit unit = gtk_event_controller_scroll_get_unit(controller);
-    const double lines = (unit == GDK_SCROLL_UNIT_WHEEL)
-                             ? dy * kLinesPerWheelStep
-                             : dy / static_cast<double>(st->cell_h);
-    st->scroll_accum += lines;
-    const int whole = static_cast<int>(st->scroll_accum);  // truncates toward zero
-    if (whole != 0) {
-        st->scroll_accum -= whole;
-        scroll_history(self, whole);
+
+    // One step per wheel notch; a touchpad makes a step per cell height of
+    // travel. Fractions carry over so slow, smooth scrolling still lands.
+    const bool wheel = gtk_event_controller_scroll_get_unit(controller) == GDK_SCROLL_UNIT_WHEEL;
+    st->scroll_accum += wheel ? dy : dy / static_cast<double>(st->cell_h);
+    const int steps = static_cast<int>(st->scroll_accum);  // truncates toward zero
+    if (steps == 0) {
+        return TRUE;
     }
+    st->scroll_accum -= steps;
+    const int count = std::abs(steps);
+
+    if (reporting) {
+        // xterm reports one wheel "press" per notch, at the pointer's cell.
+        int col = 0;
+        int row = 0;
+        pixel_to_report_cell(self, st->pointer_x, st->pointer_y, col, row);
+        const int button = steps < 0 ? gtkpyte::kWheelUp : gtkpyte::kWheelDown;
+        for (int i = 0; i < count; ++i) {
+            send_mouse(self, gtkpyte::MouseAction::Press, button, col, row, state);
+        }
+        return TRUE;
+    }
+
+    const int lines = wheel ? count * static_cast<int>(kLinesPerWheelStep) : count;
+    if (alt_scroll) {
+        // Cursor keys, honouring DECCKM, which is what a pager or editor on
+        // the alternate screen reads.
+        const guint key = steps < 0 ? GDK_KEY_Up : GDK_KEY_Down;
+        const std::string one =
+            gtkpyte::encode_key(key, static_cast<GdkModifierType>(0), st->key_modes);
+        std::string bytes;
+        for (int i = 0; i < lines; ++i) {
+            bytes += one;
+        }
+        emit_commit(self, bytes);
+        return TRUE;
+    }
+
+    scroll_history(self, steps < 0 ? -lines : lines);
     return TRUE;
 }
 
@@ -984,6 +1174,20 @@ static void gtkpyte_terminal_init(GtkpyteTerminal *self) {
         gtk_event_controller_scroll_new(GTK_EVENT_CONTROLLER_SCROLL_VERTICAL);
     g_signal_connect(scroll, "scroll", G_CALLBACK(on_scroll), self);
     gtk_widget_add_controller(widget, scroll);
+
+    // Mouse reporting first, in the capture phase, so it can take a press
+    // away from selection when the application has asked for the mouse.
+    GtkGesture *report = gtk_gesture_drag_new();
+    gtk_gesture_single_set_button(GTK_GESTURE_SINGLE(report), 0);
+    gtk_event_controller_set_propagation_phase(GTK_EVENT_CONTROLLER(report), GTK_PHASE_CAPTURE);
+    g_signal_connect(report, "drag-begin", G_CALLBACK(on_report_begin), self);
+    g_signal_connect(report, "drag-update", G_CALLBACK(on_report_update), self);
+    g_signal_connect(report, "drag-end", G_CALLBACK(on_report_end), self);
+    gtk_widget_add_controller(widget, GTK_EVENT_CONTROLLER(report));
+
+    GtkEventController *motion = gtk_event_controller_motion_new();
+    g_signal_connect(motion, "motion", G_CALLBACK(on_pointer_motion), self);
+    gtk_widget_add_controller(widget, motion);
 
     // Any button: primary selects, middle pastes the primary selection.
     GtkGesture *click = gtk_gesture_click_new();
