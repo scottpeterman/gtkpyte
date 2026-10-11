@@ -46,7 +46,19 @@ int gtkpyte_terminal_get_cell_height(GtkpyteTerminal *self);
 /* The visible screen as text, one line per row, trailing spaces kept. */
 char *gtkpyte_terminal_get_screen_text(GtkpyteTerminal *self);
 
-/* Signals
+/* Selection. Copying is never automatic: selecting puts the text on the
+ * primary selection (middle-click paste, X11/Wayland convention) but leaves
+ * the clipboard alone until copy_clipboard() -- Ctrl+Shift+C -- is called. */
+gboolean gtkpyte_terminal_has_selection(GtkpyteTerminal *self);
+char *gtkpyte_terminal_get_selected_text(GtkpyteTerminal *self);
+void gtkpyte_terminal_copy_clipboard(GtkpyteTerminal *self);
+void gtkpyte_terminal_select_all(GtkpyteTerminal *self);
+void gtkpyte_terminal_clear_selection(GtkpyteTerminal *self);
+
+/* Scrollback is exposed through GtkScrollable (in lines, not pixels): put the
+ * terminal in a GtkScrolledWindow for a scrollbar.
+ *
+ * Signals
  *
  *   "commit"  (GtkpyteTerminal *, GBytes *data)
  *       Bytes to send upstream: keystrokes, pastes, and replies the emulator
@@ -56,6 +68,9 @@ char *gtkpyte_terminal_get_screen_text(GtkpyteTerminal *self);
  *   "resized" (GtkpyteTerminal *, int columns, int rows)
  *       The grid changed shape. Whatever is producing the bytes needs to know
  *       (TIOCSWINSZ for a pty, window-change for SSH).
+ *
+ *   "selection-changed" (GtkpyteTerminal *)
+ *       A selection appeared or went away -- for enabling a Copy menu item.
  */
 
 G_END_DECLS

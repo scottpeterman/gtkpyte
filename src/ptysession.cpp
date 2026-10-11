@@ -18,6 +18,10 @@ constexpr unsigned long kReadBudget = 512 * 1024;
 constexpr guint kReapIntervalMs = 20;
 constexpr int kReapMaxTries = 100;
 
+// Once this much of the write queue has been sent, compact it so a long paste
+// does not hold its whole length in memory until the end.
+constexpr std::size_t kCompactThreshold = 64 * 1024;
+
 }  // namespace
 
 PtySession::PtySession(GtkpyteTerminal *terminal)
@@ -34,6 +38,10 @@ PtySession::~PtySession() {
     if (reap_timer_ != 0) {
         g_source_remove(reap_timer_);
         reap_timer_ = 0;
+    }
+    if (write_watch_ != 0) {
+        g_source_remove(write_watch_);
+        write_watch_ = 0;
     }
     g_signal_handler_disconnect(terminal_, commit_handler_);
     g_signal_handler_disconnect(terminal_, resized_handler_);
@@ -71,7 +79,14 @@ gboolean PtySession::on_readable(gint, GIOCondition, gpointer data) {
         // 0 is end of file (Pty folds EIO into it); any other error is fatal
         // to the session just the same. The source is removed by returning
         // G_SOURCE_REMOVE, so clear the id before anything can delete us.
+        // Queued input has nowhere to go now.
         self->watch_ = 0;
+        if (self->write_watch_ != 0) {
+            g_source_remove(self->write_watch_);
+            self->write_watch_ = 0;
+        }
+        self->out_.clear();
+        self->out_pos_ = 0;
         self->child_closed();
         return G_SOURCE_REMOVE;  // `self` may be gone: touch nothing
     }
@@ -122,8 +137,58 @@ void PtySession::on_commit(GtkpyteTerminal *, GBytes *bytes, gpointer data) {
     gsize len = 0;
     const char *ptr = static_cast<const char *>(g_bytes_get_data(bytes, &len));
     if (ptr != nullptr && len > 0) {
-        self->pty_.write(ptr, static_cast<unsigned long>(len));
+        self->send(ptr, len);
     }
+}
+
+void PtySession::send(const char *data, gsize len) {
+    if (pty_.fd() < 0 || finished_) {
+        return;
+    }
+    out_.append(data, len);
+    if (drain()) {
+        // Everything went out; a pending watch has nothing left to do.
+        if (write_watch_ != 0) {
+            g_source_remove(write_watch_);
+            write_watch_ = 0;
+        }
+        return;
+    }
+    // The tty input queue is full -- the child is busy, typically echoing a
+    // paste. Resume when it has room.
+    if (write_watch_ == 0) {
+        write_watch_ = g_unix_fd_add(pty_.fd(), G_IO_OUT, on_writable, this);
+    }
+}
+
+bool PtySession::drain() {
+    while (out_pos_ < out_.size()) {
+        const long n = pty_.write(out_.data() + out_pos_,
+                                  static_cast<unsigned long>(out_.size() - out_pos_));
+        if (n <= 0) {
+            break;  // the child is not reading right now
+        }
+        out_pos_ += static_cast<std::size_t>(n);
+    }
+    if (out_pos_ >= out_.size()) {
+        out_.clear();
+        out_pos_ = 0;
+        return true;
+    }
+    if (out_pos_ >= kCompactThreshold) {
+        out_.erase(0, out_pos_);
+        out_pos_ = 0;
+    }
+    return false;
+}
+
+gboolean PtySession::on_writable(gint, GIOCondition, gpointer data) {
+    auto *self = static_cast<PtySession *>(data);
+    if (self->drain()) {
+        self->write_watch_ = 0;
+        return G_SOURCE_REMOVE;
+    }
+    return G_SOURCE_CONTINUE;
 }
 
 void PtySession::on_resized(GtkpyteTerminal *, int cols, int rows, gpointer data) {

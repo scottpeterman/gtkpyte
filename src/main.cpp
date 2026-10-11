@@ -6,7 +6,10 @@
 //   gtkpyte --font "DejaVu Sans Mono 12"
 //   gtkpyte -- htop
 //
-// Ctrl+Shift+V pastes. Shift+PageUp/PageDown and the wheel scroll back.
+// Drag to select (double-click a word, triple-click a line); Ctrl+Shift+C
+// copies, Ctrl+Shift+V pastes, Ctrl+Shift+A selects all, middle-click pastes
+// the primary selection. Shift+PageUp/PageDown, the wheel or the scrollbar
+// move through scrollback.
 
 #include <gtk/gtk.h>
 
@@ -65,7 +68,17 @@ void on_activate(GtkApplication *app, gpointer) {
 
     const std::string program = g_options.program.empty() ? user_shell() : g_options.program;
     gtk_window_set_title(GTK_WINDOW(window), program.c_str());
-    gtk_window_set_child(GTK_WINDOW(window), terminal);
+
+    // The terminal is a GtkScrollable, so the scrolled window supplies the
+    // scrollbar and the terminal keeps owning what a scroll means. Natural
+    // size propagates so the window opens at the terminal's 80x24.
+    GtkWidget *scroller = gtk_scrolled_window_new();
+    gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(scroller), GTK_POLICY_NEVER,
+                                   GTK_POLICY_AUTOMATIC);
+    gtk_scrolled_window_set_propagate_natural_width(GTK_SCROLLED_WINDOW(scroller), TRUE);
+    gtk_scrolled_window_set_propagate_natural_height(GTK_SCROLLED_WINDOW(scroller), TRUE);
+    gtk_scrolled_window_set_child(GTK_SCROLLED_WINDOW(scroller), terminal);
+    gtk_window_set_child(GTK_WINDOW(window), scroller);
 
     auto *session = new gtkpyte::PtySession(term);
     // Owned by the window: closing it hangs up the child.

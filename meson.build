@@ -25,6 +25,7 @@ gtkpyte_lib = static_library('gtkpyte',
   'src/palette.cpp',
   'src/pty.cpp',
   'src/ptysession.cpp',
+  'src/selection.cpp',
   dependencies : [pyte_dep, gtk_dep, util_dep],
 )
 
@@ -50,6 +51,7 @@ if get_option('tests')
     'tests/main.cpp',
     'tests/test_keymap.cpp',
     'tests/test_pty.cpp',
+    'tests/test_selection.cpp',
     dependencies : [gtkpyte_dep, doctest_dep],
   )
   test('gtkpyte_tests', gtkpyte_tests)

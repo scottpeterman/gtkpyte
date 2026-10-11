@@ -3,6 +3,7 @@
 
 #include <glib.h>
 
+#include <cstddef>
 #include <functional>
 #include <string>
 #include <vector>
@@ -43,6 +44,17 @@ private:
     static void on_commit(GtkpyteTerminal *terminal, GBytes *bytes, gpointer data);
     static void on_resized(GtkpyteTerminal *terminal, int cols, int rows, gpointer data);
     static gboolean on_reap_retry(gpointer data);
+    static gboolean on_writable(gint fd, GIOCondition condition, gpointer data);
+
+    // Queue bytes for the child and write as much as the kernel takes now.
+    // The rest goes out from on_writable as the child reads. Nothing is ever
+    // dropped, and ordering holds because every write goes through here --
+    // a keystroke typed during a long paste lands after the paste, not inside
+    // it.
+    void send(const char *data, gsize len);
+    // Write queued bytes until done or the kernel pushes back; true when the
+    // queue is empty.
+    bool drain();
 
     // Output has hit end of file. The child may still be on its way out, so
     // its status is collected on a short retry before the handler runs.
@@ -52,6 +64,9 @@ private:
     GtkpyteTerminal *terminal_;
     Pty pty_;
     guint watch_ = 0;
+    guint write_watch_ = 0;
+    std::string out_;          // bytes accepted but not yet written
+    std::size_t out_pos_ = 0;  // how much of out_ has been written
     guint reap_timer_ = 0;
     int reap_tries_ = 0;
     gulong commit_handler_ = 0;

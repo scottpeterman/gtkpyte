@@ -62,3 +62,15 @@ TEST_CASE("exit status is collected") {
     REQUIRE(WIFEXITED(status));
     CHECK(WEXITSTATUS(status) == 3);
 }
+
+TEST_CASE("write returns a short count when the child is not reading") {
+    // The contract PtySession's write queue depends on: a full tty input
+    // queue is reported as a partial write, never blocked on or hidden.
+    gtkpyte::Pty pty;
+    REQUIRE(pty.start("/bin/sh", {"-c", "sleep 5"}, 80, 24));
+    const std::string big(1024 * 1024, 'x');
+    const long n = pty.write(big);
+    CHECK(n > 0);
+    CHECK(n < static_cast<long>(big.size()));
+    pty.terminate();
+}

@@ -178,9 +178,9 @@ long Pty::write(const char *buf, unsigned long len) {
             continue;
         }
         if (n < 0 && (errno == EAGAIN || errno == EWOULDBLOCK)) {
-            // The child is not draining. Keystrokes are small and the kernel
-            // buffer is not; if this ever blocks in practice it means paste,
-            // and that wants a write queue rather than a spin here.
+            // The child is not draining its input right now. Return what
+            // was written; the caller queues the rest (PtySession does) --
+            // dropping it here is how a large paste loses its tail.
             break;
         }
         break;

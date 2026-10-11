@@ -41,7 +41,9 @@ public:
     // Non-blocking. Returns bytes read, 0 at end of file, -1 on error or when
     // nothing is available (errno EAGAIN).
     long read(char *buf, unsigned long len);
-    // Writes all of `len` unless the child goes away; returns bytes written.
+    // Non-blocking: writes what the kernel accepts and returns that count,
+    // which is less than `len` when the child's input queue is full. The
+    // caller owns the remainder.
     long write(const char *buf, unsigned long len);
     long write(const std::string &data);
 
