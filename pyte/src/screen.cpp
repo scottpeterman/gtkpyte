@@ -15,6 +15,17 @@ int clamp_int(int value, int low, int high) {
     return value;
 }
 
+// Nothing visible on the row. Attributes are ignored: an erased row keeps
+// whatever background was current, and that is still an empty row.
+bool row_blank(const Row &row) {
+    for (const Cell &cell : row) {
+        if (cell.ch != U' ' && cell.ch != U'\0') {
+            return false;
+        }
+    }
+    return true;
+}
+
 }  // namespace
 
 Screen::Screen(int cols, int rows, int max_scrollback)
@@ -91,6 +102,24 @@ void Screen::resize(int cols, int rows) {
         return;
     }
     snap_to_live();
+
+    // Shrinking: blank rows below the cursor go first, the way xterm and VTE
+    // do it. The store anchors the bottom, so without this a window that
+    // shrinks with empty space under the prompt pushes the content ABOVE the
+    // prompt into scrollback and leaves the empty rows on screen. Only blank
+    // rows are dropped -- a row with anything on it is never lost, it goes
+    // to scrollback as before.
+    if (rows < rows_) {
+        const int want = rows_ - rows;
+        int blank_below = 0;
+        for (int y = rows_ - 1; y > cursor_y_ && blank_below < want; --y) {
+            if (!row_blank(*store_.line(y))) {
+                break;
+            }
+            ++blank_below;
+        }
+        store_.drop_bottom(blank_below);
+    }
 
     // The store anchors the BOTTOM of the live window across a line-count
     // change, so base moves and every resident row lands on a different screen

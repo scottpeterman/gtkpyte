@@ -135,6 +135,14 @@ void RowStore::resize(int cols, int lines, const Cell &fill) {
     }
 }
 
+void RowStore::drop_bottom(int n) {
+    n = std::min(std::max(n, 0), lines_ - 1);
+    for (int i = 0; i < n; ++i) {
+        rows_.pop_back();
+    }
+    lines_ -= n;
+}
+
 void RowStore::clear_scrollback() {
     const int drop = base_ - origin_;
     if (drop <= 0) {

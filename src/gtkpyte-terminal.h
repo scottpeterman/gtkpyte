@@ -32,11 +32,50 @@ void gtkpyte_terminal_paste(GtkpyteTerminal *self, const char *utf8);
 /* Paste the clipboard contents (what Ctrl+Shift+V does). */
 void gtkpyte_terminal_paste_clipboard(GtkpyteTerminal *self);
 
-/* Font, as a Pango description string ("Monospace 11"). Changing it re-derives
- * the cell size and so the grid. */
+/* Font, as a Pango description string ("Monospace 11") or a description.
+ * Changing it re-derives the cell size and so the grid, and tells the child
+ * through "resized". get_font returns a newly allocated string. Also the
+ * "font" property. */
 void gtkpyte_terminal_set_font(GtkpyteTerminal *self, const char *font_desc);
+void gtkpyte_terminal_set_font_desc(GtkpyteTerminal *self, const PangoFontDescription *desc);
+char *gtkpyte_terminal_get_font(GtkpyteTerminal *self);
 
+/* Rows of history kept; 0 disables scrollback. The "scrollback-lines" property. */
 void gtkpyte_terminal_set_scrollback(GtkpyteTerminal *self, int lines);
+
+/* Colours.
+ *
+ * set_colors sets the default foreground and background and the 16 ANSI
+ * entries in one call (palette_size 0, 8 or 16). A NULL colour, and any
+ * palette entry not supplied, goes back to its default. The 256-colour cube
+ * and greyscale ramp above the 16 are xterm's and fixed; truecolour is drawn
+ * as sent.
+ *
+ * The single-colour setters take NULL for "default" as well. Each is also a
+ * GdkRGBA property: "foreground-color", "background-color", "cursor-color",
+ * "selection-color" (painted over text, so give it alpha). */
+void gtkpyte_terminal_set_colors(GtkpyteTerminal *self, const GdkRGBA *foreground,
+                                 const GdkRGBA *background, const GdkRGBA *palette,
+                                 gsize palette_size);
+void gtkpyte_terminal_set_color_foreground(GtkpyteTerminal *self, const GdkRGBA *color);
+void gtkpyte_terminal_set_color_background(GtkpyteTerminal *self, const GdkRGBA *color);
+void gtkpyte_terminal_set_color_cursor(GtkpyteTerminal *self, const GdkRGBA *color);
+void gtkpyte_terminal_set_color_selection(GtkpyteTerminal *self, const GdkRGBA *color);
+void gtkpyte_terminal_get_color_foreground(GtkpyteTerminal *self, GdkRGBA *color);
+void gtkpyte_terminal_get_color_background(GtkpyteTerminal *self, GdkRGBA *color);
+void gtkpyte_terminal_get_color_cursor(GtkpyteTerminal *self, GdkRGBA *color);
+void gtkpyte_terminal_get_color_selection(GtkpyteTerminal *self, GdkRGBA *color);
+/* Fills palette[0..15]. */
+void gtkpyte_terminal_get_palette(GtkpyteTerminal *self, GdkRGBA *palette);
+
+/* Built-in schemes: foreground, background, cursor and the 16 ANSI colours.
+ * set returns FALSE for an unknown name and changes nothing. get returns the
+ * scheme last applied, or NULL once any colour has been set individually.
+ * The "color-scheme" property. list returns a NULL-terminated array to free
+ * with g_strfreev. */
+gboolean gtkpyte_terminal_set_color_scheme(GtkpyteTerminal *self, const char *name);
+const char *gtkpyte_terminal_get_color_scheme(GtkpyteTerminal *self);
+char **gtkpyte_terminal_list_color_schemes(void);
 
 int gtkpyte_terminal_get_columns(GtkpyteTerminal *self);
 int gtkpyte_terminal_get_rows(GtkpyteTerminal *self);

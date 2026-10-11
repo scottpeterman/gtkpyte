@@ -12,10 +12,11 @@
 #include <string>
 
 #include "keymap.h"
+#include "mouse.h"
 #include "palette.h"
 #include "pyte/screen.h"
 #include "pyte/stream.h"
-#include "mouse.h"
+#include "schemes.h"
 #include "selection.h"
 
 namespace {
@@ -35,9 +36,9 @@ constexpr double kLinesPerWheelStep = 3.0;
 // Speed comes from lines per tick (see autoscroll_step), not the interval.
 constexpr guint kAutoScrollIntervalMs = 30;
 
-// Painted over the glyphs with alpha rather than as a background, so it works
-// whatever colours the application chose -- for btop that is most of what is
-// on screen.
+// Default selection highlight. Painted over the glyphs with alpha rather than
+// as a background, so it works whatever colours the application chose -- for
+// btop that is most of what is on screen.
 constexpr GdkRGBA kSelectionColor = {80.0f / 255.0f, 120.0f / 255.0f, 200.0f / 255.0f,
                                      110.0f / 255.0f};
 
@@ -45,7 +46,23 @@ enum { SIGNAL_COMMIT, SIGNAL_RESIZED, SIGNAL_SELECTION_CHANGED, N_SIGNALS };
 guint g_signals[N_SIGNALS];
 
 // GtkScrollable's four properties, overridden from the interface.
-enum { PROP_0, PROP_HADJUSTMENT, PROP_VADJUSTMENT, PROP_HSCROLL_POLICY, PROP_VSCROLL_POLICY };
+enum {
+    PROP_0,
+    PROP_HADJUSTMENT,
+    PROP_VADJUSTMENT,
+    PROP_HSCROLL_POLICY,
+    PROP_VSCROLL_POLICY,
+    // Our own, after the four GtkScrollable overrides.
+    PROP_FONT,
+    PROP_SCROLLBACK_LINES,
+    PROP_COLOR_SCHEME,
+    PROP_FOREGROUND_COLOR,
+    PROP_BACKGROUND_COLOR,
+    PROP_CURSOR_COLOR,
+    PROP_SELECTION_COLOR,
+    N_PROPS
+};
+GParamSpec *g_props[N_PROPS];
 
 // Everything with a C++ constructor lives here. GObject allocates instance
 // structs with g_malloc0 and never runs constructors, so C++ members cannot sit
@@ -57,6 +74,10 @@ struct State {
     gtkpyte::Palette palette;
     gtkpyte::KeyModes key_modes;
     gtkpyte::Selection selection;
+    GdkRGBA selection_color = kSelectionColor;
+    // Name of the built-in scheme last applied; empty once any single colour
+    // is set by hand, because the result is no longer that scheme.
+    std::string scheme = "xterm";
 
     PangoFontDescription *font = nullptr;
     int cell_w = 8;
@@ -447,7 +468,7 @@ void paint_selection(GtkpyteTerminal *self, GtkSnapshot *snapshot) {
         const graphene_rect_t r = GRAPHENE_RECT_INIT(
             static_cast<float>(from * st->cell_w), static_cast<float>(y * st->cell_h),
             static_cast<float>((to - from) * st->cell_w), static_cast<float>(st->cell_h));
-        gtk_snapshot_append_color(snapshot, &kSelectionColor, &r);
+        gtk_snapshot_append_color(snapshot, &st->selection_color, &r);
     }
 }
 
@@ -1067,6 +1088,27 @@ void gtkpyte_terminal_get_property(GObject *object, guint prop_id, GValue *value
         case PROP_VSCROLL_POLICY:
             g_value_set_enum(value, st->vscroll_policy);
             break;
+        case PROP_FONT:
+            g_value_take_string(value, pango_font_description_to_string(st->font));
+            break;
+        case PROP_SCROLLBACK_LINES:
+            g_value_set_int(value, st->screen.max_scrollback());
+            break;
+        case PROP_COLOR_SCHEME:
+            g_value_set_string(value, st->scheme.empty() ? nullptr : st->scheme.c_str());
+            break;
+        case PROP_FOREGROUND_COLOR:
+            g_value_set_boxed(value, &st->palette.foreground());
+            break;
+        case PROP_BACKGROUND_COLOR:
+            g_value_set_boxed(value, &st->palette.background());
+            break;
+        case PROP_CURSOR_COLOR:
+            g_value_set_boxed(value, &st->palette.cursor());
+            break;
+        case PROP_SELECTION_COLOR:
+            g_value_set_boxed(value, &st->selection_color);
+            break;
         default:
             G_OBJECT_WARN_INVALID_PROPERTY_ID(object, prop_id, pspec);
             break;
@@ -1089,6 +1131,31 @@ void gtkpyte_terminal_set_property(GObject *object, guint prop_id, const GValue 
             break;
         case PROP_VSCROLL_POLICY:
             st->vscroll_policy = static_cast<GtkScrollablePolicy>(g_value_get_enum(value));
+            break;
+        case PROP_FONT:
+            gtkpyte_terminal_set_font(self, g_value_get_string(value));
+            break;
+        case PROP_SCROLLBACK_LINES:
+            gtkpyte_terminal_set_scrollback(self, g_value_get_int(value));
+            break;
+        case PROP_COLOR_SCHEME:
+            gtkpyte_terminal_set_color_scheme(self, g_value_get_string(value));
+            break;
+        case PROP_FOREGROUND_COLOR:
+            gtkpyte_terminal_set_color_foreground(
+                self, static_cast<const GdkRGBA *>(g_value_get_boxed(value)));
+            break;
+        case PROP_BACKGROUND_COLOR:
+            gtkpyte_terminal_set_color_background(
+                self, static_cast<const GdkRGBA *>(g_value_get_boxed(value)));
+            break;
+        case PROP_CURSOR_COLOR:
+            gtkpyte_terminal_set_color_cursor(
+                self, static_cast<const GdkRGBA *>(g_value_get_boxed(value)));
+            break;
+        case PROP_SELECTION_COLOR:
+            gtkpyte_terminal_set_color_selection(
+                self, static_cast<const GdkRGBA *>(g_value_get_boxed(value)));
             break;
         default:
             G_OBJECT_WARN_INVALID_PROPERTY_ID(object, prop_id, pspec);
@@ -1133,6 +1200,30 @@ static void gtkpyte_terminal_class_init(GtkpyteTerminalClass *klass) {
     g_object_class_override_property(object_class, PROP_VADJUSTMENT, "vadjustment");
     g_object_class_override_property(object_class, PROP_HSCROLL_POLICY, "hscroll-policy");
     g_object_class_override_property(object_class, PROP_VSCROLL_POLICY, "vscroll-policy");
+
+    constexpr auto kRW = static_cast<GParamFlags>(G_PARAM_READWRITE | G_PARAM_STATIC_STRINGS |
+                                                  G_PARAM_EXPLICIT_NOTIFY);
+    g_props[PROP_FONT] = g_param_spec_string(
+        "font", nullptr, "Font as a Pango description string, e.g. \"Monospace 11\"",
+        kDefaultFont, kRW);
+    g_props[PROP_SCROLLBACK_LINES] = g_param_spec_int(
+        "scrollback-lines", nullptr, "Rows of history retained; 0 disables scrollback", 0,
+        G_MAXINT, kDefaultScrollback, kRW);
+    g_props[PROP_COLOR_SCHEME] = g_param_spec_string(
+        "color-scheme", nullptr,
+        "Built-in scheme last applied; NULL after colours are set individually", "xterm", kRW);
+    g_props[PROP_FOREGROUND_COLOR] = g_param_spec_boxed(
+        "foreground-color", nullptr, "Default text colour", GDK_TYPE_RGBA, kRW);
+    g_props[PROP_BACKGROUND_COLOR] = g_param_spec_boxed(
+        "background-color", nullptr, "Default background colour", GDK_TYPE_RGBA, kRW);
+    g_props[PROP_CURSOR_COLOR] = g_param_spec_boxed(
+        "cursor-color", nullptr, "Cursor colour", GDK_TYPE_RGBA, kRW);
+    g_props[PROP_SELECTION_COLOR] = g_param_spec_boxed(
+        "selection-color", nullptr, "Selection highlight, painted over text; alpha expected",
+        GDK_TYPE_RGBA, kRW);
+    for (int i = PROP_FONT; i < N_PROPS; ++i) {
+        g_object_class_install_property(object_class, static_cast<guint>(i), g_props[i]);
+    }
 
     g_signals[SIGNAL_COMMIT] =
         g_signal_new("commit", G_TYPE_FROM_CLASS(klass), G_SIGNAL_RUN_LAST, 0, nullptr,
@@ -1250,12 +1341,29 @@ void gtkpyte_terminal_set_font(GtkpyteTerminal *self, const char *font_desc) {
     st->font = pango_font_description_from_string(font_desc);
     measure_cells(self);
     gtk_widget_queue_resize(GTK_WIDGET(self));
+    gtk_widget_queue_draw(GTK_WIDGET(self));
+    g_object_notify_by_pspec(G_OBJECT(self), g_props[PROP_FONT]);
+}
+
+void gtkpyte_terminal_set_font_desc(GtkpyteTerminal *self, const PangoFontDescription *desc) {
+    g_return_if_fail(GTKPYTE_IS_TERMINAL(self));
+    g_return_if_fail(desc != nullptr);
+    char *str = pango_font_description_to_string(desc);
+    gtkpyte_terminal_set_font(self, str);
+    g_free(str);
+}
+
+char *gtkpyte_terminal_get_font(GtkpyteTerminal *self) {
+    g_return_val_if_fail(GTKPYTE_IS_TERMINAL(self), nullptr);
+    return pango_font_description_to_string(self->st->font);
 }
 
 void gtkpyte_terminal_set_scrollback(GtkpyteTerminal *self, int lines) {
     g_return_if_fail(GTKPYTE_IS_TERMINAL(self));
     self->st->screen.set_max_scrollback(std::max(0, lines));
     sync_adjustment(self);
+    gtk_widget_queue_draw(GTK_WIDGET(self));
+    g_object_notify_by_pspec(G_OBJECT(self), g_props[PROP_SCROLLBACK_LINES]);
 }
 
 int gtkpyte_terminal_get_columns(GtkpyteTerminal *self) {
@@ -1323,4 +1431,151 @@ void gtkpyte_terminal_clear_selection(GtkpyteTerminal *self) {
     st->selection.clear();
     notify_selection_changed(self);
     gtk_widget_queue_draw(GTK_WIDGET(self));
+}
+
+// --- colours ----------------------------------------------------------------
+
+namespace {
+
+GdkRGBA rgba_from_hex(unsigned v) {
+    return GdkRGBA{static_cast<float>((v >> 16) & 0xFF) / 255.0f,
+                   static_cast<float>((v >> 8) & 0xFF) / 255.0f,
+                   static_cast<float>(v & 0xFF) / 255.0f, 1.0f};
+}
+
+// Hand-set colours mean the terminal no longer shows a named scheme.
+void forget_scheme(GtkpyteTerminal *self) {
+    if (!self->st->scheme.empty()) {
+        self->st->scheme.clear();
+        g_object_notify_by_pspec(G_OBJECT(self), g_props[PROP_COLOR_SCHEME]);
+    }
+}
+
+}  // namespace
+
+void gtkpyte_terminal_set_colors(GtkpyteTerminal *self, const GdkRGBA *foreground,
+                                 const GdkRGBA *background, const GdkRGBA *palette,
+                                 gsize palette_size) {
+    g_return_if_fail(GTKPYTE_IS_TERMINAL(self));
+    g_return_if_fail(palette_size == 0 || palette_size == 8 || palette_size == 16);
+    g_return_if_fail(palette_size == 0 || palette != nullptr);
+    State *st = self->st;
+    const gtkpyte::Palette defaults;
+
+    st->palette.set_foreground(foreground != nullptr ? *foreground : defaults.foreground());
+    st->palette.set_background(background != nullptr ? *background : defaults.background());
+    // Entries not supplied go back to their default, so an 8-colour palette
+    // leaves the bright half at xterm's values.
+    for (gsize i = 0; i < 16; ++i) {
+        st->palette.set_ansi(static_cast<int>(i),
+                             i < palette_size ? palette[i] : defaults.ansi(static_cast<int>(i)));
+    }
+
+    GObject *object = G_OBJECT(self);
+    g_object_freeze_notify(object);
+    forget_scheme(self);
+    g_object_notify_by_pspec(object, g_props[PROP_FOREGROUND_COLOR]);
+    g_object_notify_by_pspec(object, g_props[PROP_BACKGROUND_COLOR]);
+    g_object_thaw_notify(object);
+    gtk_widget_queue_draw(GTK_WIDGET(self));
+}
+
+void gtkpyte_terminal_set_color_foreground(GtkpyteTerminal *self, const GdkRGBA *color) {
+    g_return_if_fail(GTKPYTE_IS_TERMINAL(self));
+    self->st->palette.set_foreground(color != nullptr ? *color : gtkpyte::Palette().foreground());
+    forget_scheme(self);
+    g_object_notify_by_pspec(G_OBJECT(self), g_props[PROP_FOREGROUND_COLOR]);
+    gtk_widget_queue_draw(GTK_WIDGET(self));
+}
+
+void gtkpyte_terminal_set_color_background(GtkpyteTerminal *self, const GdkRGBA *color) {
+    g_return_if_fail(GTKPYTE_IS_TERMINAL(self));
+    self->st->palette.set_background(color != nullptr ? *color : gtkpyte::Palette().background());
+    forget_scheme(self);
+    g_object_notify_by_pspec(G_OBJECT(self), g_props[PROP_BACKGROUND_COLOR]);
+    gtk_widget_queue_draw(GTK_WIDGET(self));
+}
+
+void gtkpyte_terminal_set_color_cursor(GtkpyteTerminal *self, const GdkRGBA *color) {
+    g_return_if_fail(GTKPYTE_IS_TERMINAL(self));
+    self->st->palette.set_cursor(color != nullptr ? *color : gtkpyte::Palette().cursor());
+    forget_scheme(self);
+    g_object_notify_by_pspec(G_OBJECT(self), g_props[PROP_CURSOR_COLOR]);
+    gtk_widget_queue_draw(GTK_WIDGET(self));
+}
+
+void gtkpyte_terminal_set_color_selection(GtkpyteTerminal *self, const GdkRGBA *color) {
+    g_return_if_fail(GTKPYTE_IS_TERMINAL(self));
+    // Not part of a scheme, so setting it leaves the scheme name alone.
+    self->st->selection_color = color != nullptr ? *color : kSelectionColor;
+    g_object_notify_by_pspec(G_OBJECT(self), g_props[PROP_SELECTION_COLOR]);
+    gtk_widget_queue_draw(GTK_WIDGET(self));
+}
+
+void gtkpyte_terminal_get_color_foreground(GtkpyteTerminal *self, GdkRGBA *color) {
+    g_return_if_fail(GTKPYTE_IS_TERMINAL(self) && color != nullptr);
+    *color = self->st->palette.foreground();
+}
+
+void gtkpyte_terminal_get_color_background(GtkpyteTerminal *self, GdkRGBA *color) {
+    g_return_if_fail(GTKPYTE_IS_TERMINAL(self) && color != nullptr);
+    *color = self->st->palette.background();
+}
+
+void gtkpyte_terminal_get_color_cursor(GtkpyteTerminal *self, GdkRGBA *color) {
+    g_return_if_fail(GTKPYTE_IS_TERMINAL(self) && color != nullptr);
+    *color = self->st->palette.cursor();
+}
+
+void gtkpyte_terminal_get_color_selection(GtkpyteTerminal *self, GdkRGBA *color) {
+    g_return_if_fail(GTKPYTE_IS_TERMINAL(self) && color != nullptr);
+    *color = self->st->selection_color;
+}
+
+void gtkpyte_terminal_get_palette(GtkpyteTerminal *self, GdkRGBA *palette) {
+    g_return_if_fail(GTKPYTE_IS_TERMINAL(self) && palette != nullptr);
+    for (int i = 0; i < 16; ++i) {
+        palette[i] = self->st->palette.ansi(i);
+    }
+}
+
+gboolean gtkpyte_terminal_set_color_scheme(GtkpyteTerminal *self, const char *name) {
+    g_return_val_if_fail(GTKPYTE_IS_TERMINAL(self), FALSE);
+    const gtkpyte::ColorScheme *scheme = gtkpyte::find_scheme(name);
+    if (scheme == nullptr) {
+        return FALSE;
+    }
+    State *st = self->st;
+    st->palette.set_foreground(rgba_from_hex(scheme->foreground));
+    st->palette.set_background(rgba_from_hex(scheme->background));
+    st->palette.set_cursor(rgba_from_hex(scheme->cursor));
+    for (int i = 0; i < 16; ++i) {
+        st->palette.set_ansi(i, rgba_from_hex(scheme->ansi[i]));
+    }
+    st->scheme = scheme->name;
+
+    GObject *object = G_OBJECT(self);
+    g_object_freeze_notify(object);
+    g_object_notify_by_pspec(object, g_props[PROP_COLOR_SCHEME]);
+    g_object_notify_by_pspec(object, g_props[PROP_FOREGROUND_COLOR]);
+    g_object_notify_by_pspec(object, g_props[PROP_BACKGROUND_COLOR]);
+    g_object_notify_by_pspec(object, g_props[PROP_CURSOR_COLOR]);
+    g_object_thaw_notify(object);
+    gtk_widget_queue_draw(GTK_WIDGET(self));
+    return TRUE;
+}
+
+const char *gtkpyte_terminal_get_color_scheme(GtkpyteTerminal *self) {
+    g_return_val_if_fail(GTKPYTE_IS_TERMINAL(self), nullptr);
+    return self->st->scheme.empty() ? nullptr : self->st->scheme.c_str();
+}
+
+char **gtkpyte_terminal_list_color_schemes(void) {
+    std::size_t count = 0;
+    const gtkpyte::ColorScheme *all = gtkpyte::schemes(count);
+    char **names = g_new0(char *, count + 1);
+    for (std::size_t i = 0; i < count; ++i) {
+        names[i] = g_strdup(all[i].name);
+    }
+    return names;
 }

@@ -27,6 +27,7 @@ public:
 
     // One of the 16 ANSI entries. The cube and ramp above them are xterm's.
     void set_ansi(int index, const GdkRGBA &c);
+    const GdkRGBA &ansi(int index) const { return ansi_[index & 15]; }
 
 private:
     GdkRGBA ansi_[16];

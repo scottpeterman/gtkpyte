@@ -4,6 +4,8 @@
 //
 //   gtkpyte
 //   gtkpyte --font "DejaVu Sans Mono 12"
+//   gtkpyte --scheme solarized-dark
+//   gtkpyte --list-schemes
 //   gtkpyte -- htop
 //
 // Drag to select (double-click a word, triple-click a line); Ctrl+Shift+C
@@ -30,6 +32,7 @@ namespace {
 
 struct Options {
     std::string font;
+    std::string scheme;
     std::string program;
     std::vector<std::string> args;
 };
@@ -64,6 +67,9 @@ void on_activate(GtkApplication *app, gpointer) {
     auto *term = GTKPYTE_TERMINAL(terminal);
     if (!g_options.font.empty()) {
         gtkpyte_terminal_set_font(term, g_options.font.c_str());
+    }
+    if (!g_options.scheme.empty()) {
+        gtkpyte_terminal_set_color_scheme(term, g_options.scheme.c_str());
     }
 
     const std::string program = g_options.program.empty() ? user_shell() : g_options.program;
@@ -104,7 +110,26 @@ void on_activate(GtkApplication *app, gpointer) {
 }
 
 void usage() {
-    std::cerr << "usage: gtkpyte [--font \"Family Size\"] [-- program [args...]]\n";
+    std::cerr << "usage: gtkpyte [--font \"Family Size\"] [--scheme NAME] [--list-schemes]"
+                 " [-- program [args...]]\n";
+}
+
+bool scheme_known(const std::string &name) {
+    char **names = gtkpyte_terminal_list_color_schemes();
+    bool found = false;
+    for (char **n = names; *n != nullptr; ++n) {
+        found = found || name == *n;
+    }
+    g_strfreev(names);
+    return found;
+}
+
+void list_schemes() {
+    char **names = gtkpyte_terminal_list_color_schemes();
+    for (char **n = names; *n != nullptr; ++n) {
+        std::cout << *n << "\n";
+    }
+    g_strfreev(names);
 }
 
 }  // namespace
@@ -115,6 +140,13 @@ int main(int argc, char *argv[]) {
             g_options.font = argv[++i];
         } else if (std::strncmp(argv[i], "--font=", 7) == 0) {
             g_options.font = argv[i] + 7;
+        } else if (std::strcmp(argv[i], "--scheme") == 0 && i + 1 < argc) {
+            g_options.scheme = argv[++i];
+        } else if (std::strncmp(argv[i], "--scheme=", 9) == 0) {
+            g_options.scheme = argv[i] + 9;
+        } else if (std::strcmp(argv[i], "--list-schemes") == 0) {
+            list_schemes();
+            return 0;
         } else if (std::strcmp(argv[i], "--") == 0) {
             if (i + 1 < argc) {
                 g_options.program = argv[i + 1];
@@ -130,6 +162,14 @@ int main(int argc, char *argv[]) {
             usage();
             return 2;
         }
+    }
+
+    // Checked before any window exists, so a typo is an error, not a silently
+    // default-coloured terminal.
+    if (!g_options.scheme.empty() && !scheme_known(g_options.scheme)) {
+        std::cerr << "gtkpyte: unknown scheme \"" << g_options.scheme
+                  << "\" (see --list-schemes)\n";
+        return 2;
     }
 
     // Non-unique: each launch is its own terminal, not a request to an

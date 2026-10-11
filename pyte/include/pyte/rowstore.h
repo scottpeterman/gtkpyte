@@ -70,6 +70,12 @@ public:
     // (a cursor) must shift it by the delta.
     void resize(int cols, int lines, const Cell &fill);
 
+    // Remove the bottom n rows of the live window outright -- not into
+    // scrollback -- and shrink the window by n. base() does not move. For a
+    // resize that should lose blank rows under the cursor before it pushes
+    // content above it into history. At least one row always remains.
+    void drop_bottom(int n);
+
     // Drop scrollback, keeping the live window. This is what CSI 3 J asks for.
     void clear_scrollback();
 

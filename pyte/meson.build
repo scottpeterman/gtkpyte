@@ -31,6 +31,7 @@ if get_option('tests')
     'tests/test_screen.cpp',
     'tests/test_stream.cpp',
     'tests/test_range.cpp',
+    'tests/test_resize.cpp',
     dependencies : [pyte_dep, doctest_dep],
   )
   test('pyte_tests', pyte_tests)
