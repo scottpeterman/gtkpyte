@@ -72,3 +72,11 @@ configure_file(
   install : true,
   install_dir : get_option('datadir') / 'applications',
 )
+
+# Licence texts and attribution travel with the binary.
+install_data('LICENSE', 'THIRD-PARTY-NOTICES.md', 'README.md',
+  install_dir : get_option('datadir') / 'doc' / meson.project_name(),
+)
+install_subdir('licenses',
+  install_dir : get_option('datadir') / 'doc' / meson.project_name(),
+)
